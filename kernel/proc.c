@@ -12,6 +12,7 @@ struct proc proc[NPROC];
 
 struct proc *initproc;
 
+static uint64 proccnt;
 int nextpid = 1;
 struct spinlock pid_lock;
 
@@ -26,7 +27,7 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+  proccnt = 0; 
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
@@ -82,6 +83,7 @@ allocpid() {
   nextpid = nextpid + 1;
   release(&pid_lock);
 
+  proccnt += 1;
   return pid;
 }
 
@@ -150,6 +152,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  proccnt -= 1;
 }
 
 // Create a user page table for a given process,
@@ -274,6 +277,8 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  np->traceMask = p->traceMask;
 
   np->parent = p;
 
@@ -692,4 +697,10 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+// the number of process
+uint64 nproc() {
+  return proccnt;
 }

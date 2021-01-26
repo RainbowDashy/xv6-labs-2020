@@ -9,6 +9,8 @@
 #include "riscv.h"
 #include "defs.h"
 
+static uint64 freecnt;
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -26,6 +28,7 @@ struct {
 void
 kinit()
 {
+  freecnt = 0;
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
@@ -53,7 +56,7 @@ kfree(void *pa)
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
+  freecnt += PGSIZE;
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
@@ -78,5 +81,12 @@ kalloc(void)
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+  if (r) freecnt -= PGSIZE;
   return (void*)r;
+}
+
+
+// the amount of free memory (in bytes)
+uint64 freemem() {
+  return freecnt;
 }
