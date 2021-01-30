@@ -30,16 +30,6 @@ procinit(void)
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
-
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
   }
   kvminithart();
 }
@@ -113,6 +103,15 @@ found:
     return 0;
   }
 
+  // set up per-process kernel page table
+  // and allocate a page for the process's kernel stack
+  p->kpagetable = proc_kpagetable(p);
+  if (p->kpagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -139,8 +138,18 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  if (p->kstack) {
+    uvmunmap(p->kpagetable, p->kstack, 1, 1);
+  }
+  p->kstack = 0;
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if (p->kpagetable)
+    proc_freekpagetable(p->kpagetable);
+  
+  p->kpagetable = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -150,6 +159,27 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+}
+
+pagetable_t proc_kpagetable(struct proc *p) {
+  pagetable_t pagetable = kvmcreate();
+  
+  char *pa = kalloc();
+  if (pa == 0)
+    panic("kalloc");
+  // uint64 va = KSTACK((int) (p - proc));
+  uint64 va = KSTACK(0);
+  if (mappages(pagetable, va, PGSIZE, (uint64)pa, PTE_R | PTE_W) < 0)
+    panic("kpgtblmap");
+  p->kstack = va;
+
+  return pagetable;
+}
+
+// Recursively free page-table pages.
+// All leaf mappings must already have been removed.
+void proc_freekpagetable(pagetable_t pagetable) {
+  kvmclean(pagetable);
 }
 
 // Create a user page table for a given process,
@@ -473,11 +503,20 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // use per-process kernel page table
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+
+        // Switch back to kernel_pagetable 
+        // when no process is running
+        kvminithart();
 
         found = 1;
       }
