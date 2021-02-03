@@ -120,6 +120,8 @@ found:
     return 0;
   }
 
+//  uvm2kvmcopy(p->pagetable, p->kpagetable, (uint64)p->trapframe, (uint64)p->trapframe + PGSIZE);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -144,10 +146,10 @@ freeproc(struct proc *p)
   }
   p->kstack = 0;
 
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
   if (p->kpagetable)
     proc_freekpagetable(p->kpagetable);
+  if(p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz);
   
   p->kpagetable = 0;
   p->pagetable = 0;
@@ -255,6 +257,8 @@ userinit(void)
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
+  uvm2kvmcopy(p->pagetable, p->kpagetable, 0, p->sz);
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
@@ -273,9 +277,12 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    if (sz + n >= PLIC)
+      return -1;
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    uvm2kvmcopy(p->pagetable, p->kpagetable, sz - n, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -297,6 +304,13 @@ fork(void)
     return -1;
   }
 
+  if (kvmcopy(p->kpagetable, np->kpagetable) < 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  np->kstack = p->kstack;
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -304,6 +318,9 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  if (uvm2kvmcopy(np->pagetable, np->kpagetable, 0, np->sz) < 0)
+    return -1;
 
   np->parent = p;
 
@@ -525,6 +542,7 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
+      kvminithart();
       asm volatile("wfi");
     }
 #else

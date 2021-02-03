@@ -214,15 +214,19 @@ pagetable_t kvmcreate() {
   return pagetable;
 }
 
+// remove mappings only
 void kvmclean(pagetable_t pagetable) {
-  uvmunmap(pagetable, UART0, 1, 0);
-  uvmunmap(pagetable, VIRTIO0, 1, 0);
-  uvmunmap(pagetable, CLINT, PGROUNDUP(0x10000)/PGSIZE, 0);
-  uvmunmap(pagetable, PLIC, PGROUNDUP(0x400000)/PGSIZE, 0);
-  uvmunmap(pagetable, KERNBASE, PGROUNDUP(PHYSTOP-KERNBASE)/PGSIZE, 0);
-  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  freewalk(pagetable);
+  for (int i = 0; i < 512; ++i) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+      kvmclean((pagetable_t)PTE2PA(pte));
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
 }
+
+
 
 // create an empty user page table.
 // returns 0 if out of memory.
@@ -409,23 +413,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
-
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -435,6 +423,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
+  return copyinstr_new(pagetable, dst, srcva, max);
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -490,4 +479,45 @@ void vmpt(pagetable_t pagetable, int level) {
     }
   }
   return;
+}
+
+// copy kernel stack only
+// physical memory only
+int kvmcopy(pagetable_t old, pagetable_t new) {
+  pte_t *pte_old, *pte_new;
+  uint64 pa_old, pa_new;
+  if ((pte_old = walk(old, KSTACK(0), 0)) == 0)
+    panic("kvmcopy: pte_old should exist");
+  if ((*pte_old & PTE_V) == 0)
+    panic("kvmcopy: old page not present");
+  if ((pte_new = walk(new, KSTACK(0), 0)) == 0)
+    panic("kvmcopy: pte_new should exist");
+  if ((*pte_new & PTE_V) == 0)
+    panic("kvmcopy: new page not present");
+  
+  pa_old = PTE2PA(*pte_old);
+  pa_new = PTE2PA(*pte_new);
+  
+  memmove((char*) pa_new, (char*) pa_old, PGSIZE);
+  return 0;
+}
+
+
+// copy pages tables from start to end in uvm to kvm
+// copy page table ONLY
+// don't copy physical memory
+int uvm2kvmcopy(pagetable_t u, pagetable_t k, uint64 start, uint64 end) {
+  pte_t *pte, *pte_k;
+  uint64 pa, i;
+  uint flags;
+  for (i = start; i < end; i += PGSIZE) {
+    if ((pte = walk(u, i, 0)) == 0)
+      panic("uvm2kvmcopy: pte should exist");
+    if ((pte_k = walk(k, i, 1)) == 0)
+      return -1;
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte) & (~PTE_U);
+    *pte_k = PA2PTE(pa) | flags | PTE_V;
+  }
+  return 0;
 }

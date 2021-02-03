@@ -75,6 +75,18 @@ exec(char *path, char **argv)
   sp = sz;
   stackbase = sp - PGSIZE;
 
+/*
+  oldpagetable = p->kpagetable;
+  if ((kpagetable = proc_kpagetable(p)) == 0)
+    goto bad;
+  if (uvm2kvmcopy(pagetable, kpagetable, 0, sz) < 0)
+    goto bad;
+  p->kpagetable = kpagetable;
+  proc_freekpagetable(oldpagetable);
+*/
+
+  uvm2kvmcopy(pagetable, p->kpagetable, 0, sz);
+
   // Push argument strings, prepare rest of stack in ustack.
   for(argc = 0; argv[argc]; argc++) {
     if(argc >= MAXARG)
