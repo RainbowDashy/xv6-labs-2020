@@ -9,6 +9,13 @@
 #include "riscv.h"
 #include "defs.h"
 
+int refcnt[(PHYSTOP-KERNBASE) / PGSIZE + 10];
+
+static inline int calcref(void* pa) {
+  int res = ((uint64)pa - KERNBASE) / PGSIZE;
+  return res;
+}
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -30,13 +37,27 @@ kinit()
   freerange(end, (void*)PHYSTOP);
 }
 
+
+void kref(void* pa) {
+  acquire(&kmem.lock);
+  refcnt[calcref(pa)]++;
+  release(&kmem.lock);
+}
+
+static inline int kderef(void* pa) {
+  return --refcnt[calcref(pa)];
+}
+
+
 void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
+    refcnt[calcref(p)] = 1;
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -46,6 +67,9 @@ freerange(void *pa_start, void *pa_end)
 void
 kfree(void *pa)
 {
+  if (kderef(pa))
+    return;
+
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
@@ -76,7 +100,10 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
+    refcnt[calcref(r)] = 1;
     memset((char*)r, 5, PGSIZE); // fill with junk
+  }
+
   return (void*)r;
 }
