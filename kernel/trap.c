@@ -70,7 +70,21 @@ usertrap(void)
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    if (r_scause() == 13 || r_scause() == 15) {
+      uint64 va = r_stval();
+      char *mem = kalloc();
+      if (mem == 0) {
+        p->killed = 1;
+        exit(-1);
+      }
+      memset(mem, 0, PGSIZE);
+      va = PGROUNDDOWN(va);
+      if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_U|PTE_W|PTE_R|PTE_X) != 0) {
+        kfree(mem);
+        p->killed = 1;
+        exit(-1);
+      }
+    }
   }
 
   if(p->killed)
