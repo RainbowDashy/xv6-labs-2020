@@ -311,17 +311,11 @@ ilock(struct inode *ip)
       panic("ilock: no type");
   }
 }
-
-void m4d3() {
-  printf("made!\n");
-}
-
 // Unlock the given inode.
 void
 iunlock(struct inode *ip)
 {
   if(ip == 0 || !holdingsleep(&ip->lock) || ip->ref < 1)
-    m4d3(),
     panic("iunlock");
 
   releasesleep(&ip->lock);
